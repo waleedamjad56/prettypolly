@@ -5,9 +5,6 @@ pipeline {
         GITHUB_CREDENTIALS = 'github-pat'
         VALIDATION_STATUS = ''
         BUILD_TIMESTAMP = sh(script: 'date "+%Y-%m-%d %H:%M:%S"', returnStdout: true).trim()
-        SMTP_HOST = 'smtp.privateemail.com'
-        SMTP_PORT = '587'
-        SMTP_USER = 'support@dcodax.com'
         NOTIFICATION_EMAILS = 'kencypher56@gmail.com,rottinken@gmail.com'
     }
 
@@ -30,7 +27,7 @@ pipeline {
                 script {
                     echo "🔍 Starting code validation..."
                     sh 'chmod +x validate-code.sh'
-                    
+
                     try {
                         sh './validate-code.sh'
                         env.VALIDATION_STATUS = 'SUCCESS'
@@ -38,60 +35,165 @@ pipeline {
                     } catch (Exception e) {
                         env.VALIDATION_STATUS = 'FAILED'
                         echo "❌ Code validation failed!"
+                        currentBuild.result = 'FAILURE'
                         error "Code validation failed. Stopping deployment."
                     }
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'validation_report.txt, validation_status.txt', allowEmptyArchive: true
-                    publishHTML([
-                        allowMissing: true,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: '.',
-                        reportFiles: 'validation_report.txt',
-                        reportName: 'Code Validation Report'
-                    ])
+                    script {
+                        // Archive artifacts
+                        if (fileExists('validation_report.txt')) {
+                            archiveArtifacts artifacts: 'validation_report.txt', allowEmptyArchive: true
+                        }
+                        if (fileExists('validation_status.txt')) {
+                            archiveArtifacts artifacts: 'validation_status.txt', allowEmptyArchive: true
+                        }
+                        
+                        // Publish HTML report if validation report exists
+                        if (fileExists('validation_report.txt')) {
+                            publishHTML([
+                                allowMissing: false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll: true,
+                                reportDir: '.',
+                                reportFiles: 'validation_report.txt',
+                                reportName: 'Code Validation Report'
+                            ])
+                        }
+                    }
                 }
             }
         }
     }
 
     post {
-        success {
+        always {
             script {
-                echo "Sending success email..."
-                emailext (
-                    subject: "✅ SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                    body: """
-                    <p>Build succeeded! Validation passed for all files.</p>
-                    <p><a href="${env.BUILD_URL}">View Build</a></p>
-                    """,
-                    mimeType: 'text/html',
-                    to: "${env.NOTIFICATION_EMAILS}",
-                    from: "${env.SMTP_USER}"
-                )
+                // Read validation report for email content
+                def validationReport = ""
+                if (fileExists('validation_report.txt')) {
+                    validationReport = readFile('validation_report.txt')
+                } else {
+                    validationReport = "No validation report generated"
+                }
+
+                // Get build log excerpt
+                def buildLog = ""
+                try {
+                    buildLog = currentBuild.rawBuild.getLog(50).join('\n')
+                } catch (Exception e) {
+                    buildLog = "Build log not available"
+                }
+
+                // Get Git commit info
+                def gitCommit = ""
+                def gitBranch = ""
+                try {
+                    gitCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                    gitBranch = sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+                } catch (Exception e) {
+                    gitCommit = "N/A"
+                    gitBranch = "N/A"
+                }
+
+                // Calculate build duration
+                def buildDuration = ""
+                if (currentBuild.duration) {
+                    def duration = currentBuild.duration
+                    def minutes = duration / 60000
+                    def seconds = (duration % 60000) / 1000
+                    buildDuration = "${minutes}m ${seconds}s"
+                } else {
+                    buildDuration = "N/A"
+                }
+
+                // Determine build status and emoji
+                def buildStatus = currentBuild.result ?: 'SUCCESS'
+                def statusEmoji = buildStatus == 'SUCCESS' ? '✅' : '❌'
+                def statusColor = buildStatus == 'SUCCESS' ? 'green' : 'red'
+
+                // Common email content
+                def emailSubject = "${statusEmoji} Jenkins Build ${buildStatus}: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                def emailBody = """
+                <html>
+                <body style="font-family: Arial, sans-serif; margin: 20px;">
+                    <div style="border: 2px solid ${statusColor}; border-radius: 8px; padding: 20px; background-color: #f9f9f9;">
+                        <h2 style="color: ${statusColor}; margin-top: 0;">
+                            ${statusEmoji} Build ${buildStatus}
+                        </h2>
+                        
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                            <h3>📋 Build Information</h3>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr><td style="padding: 5px; font-weight: bold;">Project:</td><td style="padding: 5px;">${env.JOB_NAME}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Build Number:</td><td style="padding: 5px;">#${env.BUILD_NUMBER}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Build Status:</td><td style="padding: 5px; color: ${statusColor};">${buildStatus}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Build Time:</td><td style="padding: 5px;">${env.BUILD_TIMESTAMP}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Duration:</td><td style="padding: 5px;">${buildDuration}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Git Branch:</td><td style="padding: 5px;">${gitBranch}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Git Commit:</td><td style="padding: 5px;">${gitCommit.take(8)}</td></tr>
+                            </table>
+                        </div>
+
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                            <h3>🔍 Code Validation Report</h3>
+                            <pre style="background-color: #f4f4f4; padding: 10px; border-radius: 3px; font-size: 12px; overflow-x: auto;">${validationReport}</pre>
+                        </div>
+
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                            <h3>📝 Recent Build Log</h3>
+                            <pre style="background-color: #f4f4f4; padding: 10px; border-radius: 3px; font-size: 12px; overflow-x: auto;">${buildLog}</pre>
+                        </div>
+
+                        <div style="background-color: white; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                            <h3>🔗 Quick Links</h3>
+                            <p>
+                                <a href="${env.BUILD_URL}" style="color: #007cba; text-decoration: none;">📊 View Full Build Details</a><br>
+                                <a href="${env.BUILD_URL}console" style="color: #007cba; text-decoration: none;">📋 View Console Output</a><br>
+                                <a href="${env.BUILD_URL}artifact/" style="color: #007cba; text-decoration: none;">📁 View Build Artifacts</a>
+                            </p>
+                        </div>
+
+                        <div style="background-color: #e8f4f8; padding: 10px; border-radius: 5px; margin: 10px 0; font-size: 12px; color: #666;">
+                            <p><strong>Jenkins Server:</strong> ${env.JENKINS_URL}</p>
+                            <p><strong>Notification sent:</strong> ${new Date().format('yyyy-MM-dd HH:mm:ss')}</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+
+                // Send email notification
+                echo "📧 Sending email notification..."
+                try {
+                    emailext (
+                        subject: emailSubject,
+                        body: emailBody,
+                        mimeType: 'text/html',
+                        to: env.NOTIFICATION_EMAILS,
+                        attachLog: true,
+                        compressLog: true,
+                        attachmentsPattern: 'validation_report.txt,validation_status.txt'
+                    )
+                    echo "✅ Email notification sent successfully!"
+                } catch (Exception e) {
+                    echo "❌ Failed to send email notification: ${e.getMessage()}"
+                    // Don't fail the build if email fails
+                }
             }
         }
 
-        failure {
-            script {
-                echo "Sending failure email..."
-                emailext (
-                    subject: "❌ FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                    body: """
-                    <p>Build failed! Code validation errors detected.</p>
-                    <p><a href="${env.BUILD_URL}">View Build</a></p>
-                    """,
-                    mimeType: 'text/html',
-                    to: "${env.NOTIFICATION_EMAILS}",
-                    from: "${env.SMTP_USER}"
-                )
-            }
+        success {
+            echo "🎉 Build completed successfully!"
         }
-        
-        always {
+
+        failure {
+            echo "💥 Build failed!"
+        }
+
+        cleanup {
             script {
                 echo "🧹 Cleaning up workspace..."
                 cleanWs()
