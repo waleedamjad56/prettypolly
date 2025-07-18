@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pretty Polly - Vandaveer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Georgia', serif;
+            background: linear-gradient(135deg, #2c1810 0%, #4a3425 50%, #6b4e37 100%);
+            color: #f5f5dc;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            padding: 60px 0;
+            position: relative;
+        }
+
+        .floating-leaves {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .leaf {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: rgba(139, 69, 19, 0.6);
+            border-radius: 0 100% 0 100%;
+            animation: float 15s infinite linear;
+        }
+
+        @keyframes float {
+            0% {
+                transform: translateY(-100vh) rotate(0deg);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(100vh) rotate(360deg);
+                opacity: 0;
+            }
+        }
+
+        h1 {
+            font-size: 4em;
+            margin-bottom: 20px;
+            text-shadow: 3px 3px 6px rgba(0,0,0,0.7);
+            background: linear-gradient(45deg, #f5f5dc, #daa520);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: glow 3s ease-in-out infinite alternate;
+        }
+
+        @keyframes glow {
+            from {
+                filter: drop-shadow(0 0 20px rgba(218, 165, 32, 0.5));
+            }
+            to {
+                filter: drop-shadow(0 0 40px rgba(218, 165, 32, 0.8));
+            }
+        }
+
+        .subtitle {
+            font-size: 1.5em;
+            color: #daa520;
+            margin-bottom: 10px;
+            font-style: italic;
+        }
+
+        .artist {
+            font-size: 1.2em;
+            color: #cd853f;
+            margin-bottom: 40px;
+        }
+
+        .music-player {
+            background: rgba(0,0,0,0.4);
+            padding: 30px;
+            border-radius: 15px;
+            margin: 40px 0;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(218, 165, 32, 0.3);
+            text-align: center;
+        }
+
+        .play-button {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(45deg, #daa520, #b8860b);
+            border: none;
+            border-radius: 50%;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 20px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+        }
+
+        .play-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+        }
+
+        .waveform {
+            width: 100%;
+            height: 60px;
+            background: rgba(218, 165, 32, 0.2);
+            border-radius: 30px;
+            margin: 20px 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .wave {
+            position: absolute;
+            bottom: 0;
+            width: 4px;
+            background: linear-gradient(to top, #daa520, #f5f5dc);
+            margin: 0 1px;
+            animation: wave 2s ease-in-out infinite;
+            border-radius: 2px;
+        }
+
+        @keyframes wave {
+            0%, 100% { height: 20%; }
+            50% { height: 100%; }
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin: 60px 0;
+        }
+
+        .content-card {
+            background: rgba(0,0,0,0.3);
+            padding: 30px;
+            border-radius: 15px;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(218, 165, 32, 0.2);
+            transition: transform 0.3s ease;
+        }
+
+        .content-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(218, 165, 32, 0.5);
+        }
+
+        .content-card h3 {
+            color: #daa520;
+            margin-bottom: 15px;
+            font-size: 1.4em;
+        }
+
+        .content-card p {
+            line-height: 1.6;
+            color: #f5f5dc;
+        }
+
+        .song-info {
+            text-align: center;
+            margin: 60px 0;
+        }
+
+        .folk-pattern {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.05;
+            background-image: repeating-linear-gradient(
+                45deg,
+                transparent,
+                transparent 20px,
+                rgba(218, 165, 32, 0.1) 20px,
+                rgba(218, 165, 32, 0.1) 40px
+            );
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .guitar-icon {
+            font-size: 2em;
+            color: #daa520;
+            margin: 20px;
+            animation: strum 4s ease-in-out infinite;
+        }
+
+        @keyframes strum {
+            0%, 100% { transform: rotate(-5deg); }
+            50% { transform: rotate(5deg); }
+        }
+
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            border-top: 1px solid rgba(218, 165, 32, 0.3);
+            margin-top: 60px;
+        }
+
+        @media (max-width: 768px) {
+            .content-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            h1 {
+                font-size: 2.5em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="folk-pattern"></div>
+    <div class="floating-leaves" id="leaves"></div>
+    
+    <div class="container">
+        <header>
+            <h1>Pretty Polly</h1>
+            <div class="subtitle">A Folk Ballad</div>
+            <div class="artist">by Vandaveer</div>
+            <div class="guitar-icon">🎸</div>
+        </header>
+
+        <div class="music-player">
+            <button class="play-button" id="playBtn">▶</button>
+            <div class="waveform" id="waveform"></div>
+            <p>Experience the haunting beauty of traditional folk storytelling</p>
+        </div>
+
+        <div class="content-grid">
+            <div class="content-card">
+                <h3>🎵 About the Song</h3>
+                <p>
+                    "Pretty Polly" is a traditional folk ballad that has been passed down through generations. 
+                    Vandaveer's interpretation brings a contemporary touch to this timeless story, 
+                    weaving together elements of Americana and indie folk to create something both 
+                    familiar and fresh.
+                </p>
+            </div>
+
+            <div class="content-card">
+                <h3>🎭 The Story</h3>
+                <p>
+                    This haunting ballad tells a tale steeped in folk tradition, exploring themes of 
+                    love, betrayal, and consequence. The narrative unfolds through vivid imagery 
+                    and emotional depth that has captivated listeners for generations.
+                </p>
+            </div>
+
+            <div class="content-card">
+                <h3>🎼 Musical Style</h3>
+                <p>
+                    Vandaveer's rendition features delicate acoustic arrangements, ethereal harmonies, 
+                    and a melancholic atmosphere that perfectly captures the essence of traditional 
+                    folk storytelling while maintaining their distinctive indie sensibility.
+                </p>
+            </div>
+
+            <div class="content-card">
+                <h3>🌟 About Vandaveer</h3>
+                <p>
+                    Vandaveer is known for their atmospheric folk music that blends traditional 
+                    American sounds with modern indie aesthetics. Their interpretation of classic 
+                    folk songs brings new life to old stories.
+                </p>
+            </div>
+        </div>
+
+        <div class="song-info">
+            <h2 style="color: #daa520; margin-bottom: 20px;">Folk Tradition Meets Modern Artistry</h2>
+            <p style="max-width: 600px; margin: 0 auto; line-height: 1.8;">
+                This timeless ballad represents the rich tapestry of American folk music, 
+                where stories are passed down through song, carrying with them the weight 
+                of history and the power of human emotion.
+            </p>
+        </div>
+
+        <footer>
+            <p>&copy; 2024 Pretty Polly Tribute Site | Celebrating Folk Music Heritage</p>
+        </footer>
+    </div>
+
+    <script>
+        // Create floating leaves
+        function createLeaf() {
+            const leaf = document.createElement('div');
+            leaf.className = 'leaf';
+            leaf.style.left = Math.random() * 100 + '%';
+            leaf.style.animationDelay = Math.random() * 15 + 's';
+            leaf.style.animationDuration = (Math.random() * 10 + 10) + 's';
+            document.getElementById('leaves').appendChild(leaf);
+            
+            // Remove leaf after animation
+            setTimeout(() => {
+                if (leaf.parentNode) {
+                    leaf.parentNode.removeChild(leaf);
+                }
+            }, 25000);
+        }
+
+        // Create leaves periodically
+        setInterval(createLeaf, 2000);
+
+        // Create initial leaves
+        for (let i = 0; i < 10; i++) {
+            setTimeout(createLeaf, i * 500);
+        }
+
+        // Create waveform bars
+        const waveform = document.getElementById('waveform');
+        for (let i = 0; i < 50; i++) {
+            const wave = document.createElement('div');
+            wave.className = 'wave';
+            wave.style.left = i * 2 + '%';
+            wave.style.animationDelay = Math.random() * 2 + 's';
+            wave.style.animationDuration = (Math.random() * 1 + 1.5) + 's';
+            waveform.appendChild(wave);
+        }
+
+        // Play button functionality
+        let isPlaying = false;
+        const playBtn = document.getElementById('playBtn');
+        
+        playBtn.addEventListener('click', function() {
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                playBtn.textContent = '⏸';
+                playBtn.style.background = 'linear-gradient(45deg, #cd853f, #daa520)';
+                // Animate waveform more actively
+                document.querySelectorAll('.wave').forEach(wave => {
+                    wave.style.animationDuration = '0.5s';
+                });
+            } else {
+                playBtn.textContent = '▶';
+                playBtn.style.background = 'linear-gradient(45deg, #daa520, #b8860b)';
+                // Slow down waveform
+                document.querySelectorAll('.wave').forEach(wave => {
+                    wave.style.animationDuration = '2s';
+                });
+            }
+        });
+
+        // Smooth scrolling for any internal links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth'
+                    });
+                }
+            });
+        });
+
+        // Add subtle parallax effect to background
+        window.addEventListener('scroll', () => {
+            const scrolled = window.pageYOffset;
+            const pattern = document.querySelector('.folk-pattern');
+            pattern.style.transform = `translateY(${scrolled * 0.5}px)`;
+        });
+    </script>
+</body>
+</html>
