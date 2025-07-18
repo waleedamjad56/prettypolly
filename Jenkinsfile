@@ -46,7 +46,7 @@ pipeline {
                 always {
                     archiveArtifacts artifacts: 'validation_report.txt, validation_status.txt', allowEmptyArchive: true
                     publishHTML([
-                        allowMissing: false,
+                        allowMissing: true,
                         alwaysLinkToLastBuild: true,
                         keepAll: true,
                         reportDir: '.',
