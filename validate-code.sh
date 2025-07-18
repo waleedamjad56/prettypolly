@@ -21,14 +21,18 @@ validate_html() {
     for file in $html_files; do
         echo "Validating HTML: $file"
 
-        # Validate HTML structure
+        # Validate with htmlhint
         if command -v htmlhint >/dev/null 2>&1; then
-            if htmlhint "$file"; then
+            if htmlhint "$file" > htmlhint_errors.txt 2>&1; then
                 add_to_report "✅ HTML structure valid: $file"
             else
-                add_to_report "❌ HTML structure issues: $file"
+                add_to_report "❌ HTML validation issues in: $file"
+                while IFS= read -r line; do
+                    add_to_report "   $line"
+                done < <(grep -v 'Scanned' htmlhint_errors.txt | head -10)
                 VALIDATION_PASSED=false
             fi
+            rm -f htmlhint_errors.txt
         else
             add_to_report "⚠️ HTML validation skipped (htmlhint missing)"
         fi
@@ -38,17 +42,21 @@ validate_html() {
         awk '/<style>/,/<\/style>/ {if (!/<style>/ && !/<\/style>/) print}' "$file" > inline_css.tmp
         if [ -s inline_css.tmp ]; then
             if command -v csslint >/dev/null 2>&1; then
-                if csslint --errors=errors inline_css.tmp > csslint_errors.txt 2>&1; then
+                if csslint inline_css.tmp > csslint_errors.txt 2>&1; then
                     add_to_report "✅ Inline CSS valid: $file"
                 else
-                    add_to_report "❌ Inline CSS errors: $file"
-                    add_to_report "   $(grep 'Error' csslint_errors.txt | head -n 3)"
+                    add_to_report "❌ Inline CSS errors in: $file"
+                    while IFS= read -r line; do
+                        add_to_report "   $line"
+                    done < <(grep -i 'error' csslint_errors.txt | head -10)
                     VALIDATION_PASSED=false
                 fi
                 rm -f csslint_errors.txt
             else
                 add_to_report "⚠️ CSS validation skipped (csslint missing)"
             fi
+        else
+            add_to_report "ℹ️ No inline CSS found in: $file"
         fi
         rm -f inline_css.tmp
 
@@ -60,14 +68,18 @@ validate_html() {
                 if eslint --no-eslintrc --parser-options=ecmaVersion:2020 -f compact inline_js.tmp > eslint_errors.txt 2>&1; then
                     add_to_report "✅ Inline JavaScript valid: $file"
                 else
-                    add_to_report "❌ Inline JavaScript errors: $file"
-                    add_to_report "   $(grep 'Error' eslint_errors.txt | head -n 3)"
+                    add_to_report "❌ Inline JavaScript errors in: $file"
+                    while IFS= read -r line; do
+                        add_to_report "   $line"
+                    done < <(grep -i 'error' eslint_errors.txt | head -10)
                     VALIDATION_PASSED=false
                 fi
                 rm -f eslint_errors.txt
             else
                 add_to_report "⚠️ JavaScript validation skipped (eslint missing)"
             fi
+        else
+            add_to_report "ℹ️ No inline JavaScript found in: $file"
         fi
         rm -f inline_js.tmp
     done
