@@ -61,16 +61,12 @@ pipeline {
     post {
         success {
             script {
+                echo "Sending success email..."
                 emailext (
-                    subject: "✅ Jenkins Build SUCCESS - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    subject: "✅ SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
-                    <html>
-                    <body>
-                    <h2 style="color: green;">🎉 BUILD SUCCESSFUL</h2>
-                    <p>All code validation checks passed successfully!</p>
-                    <p><a href="${env.BUILD_URL}Code_Validation_Report">View Validation Report</a></p>
-                    </body>
-                    </html>
+                    <p>Build succeeded! Validation passed for all files.</p>
+                    <p><a href="${env.BUILD_URL}">View Build</a></p>
                     """,
                     mimeType: 'text/html',
                     to: "${env.NOTIFICATION_EMAILS}",
@@ -81,21 +77,24 @@ pipeline {
 
         failure {
             script {
+                echo "Sending failure email..."
                 emailext (
-                    subject: "❌ Jenkins Build FAILED - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    subject: "❌ FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
-                    <html>
-                    <body>
-                    <h2 style="color: red;">❌ BUILD FAILED</h2>
-                    <p>Code validation failed. Please check validation report.</p>
-                    <p><a href="${env.BUILD_URL}Code_Validation_Report">View Validation Report</a></p>
-                    </body>
-                    </html>
+                    <p>Build failed! Code validation errors detected.</p>
+                    <p><a href="${env.BUILD_URL}">View Build</a></p>
                     """,
                     mimeType: 'text/html',
                     to: "${env.NOTIFICATION_EMAILS}",
                     from: "${env.SMTP_USER}"
                 )
+            }
+        }
+        
+        always {
+            script {
+                echo "🧹 Cleaning up workspace..."
+                cleanWs()
             }
         }
     }
