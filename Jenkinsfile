@@ -3,8 +3,8 @@ pipeline {
     
     environment {
         BUILD_TIMESTAMP = sh(script: 'date "+%Y-%m-%d %H:%M:%S"', returnStdout: true).trim()
+        VALIDATION_STATUS = ''
         GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-        VALIDATION_STATUS = 'NOT_STARTED'
     }
     
     triggers {
@@ -13,79 +13,69 @@ pipeline {
     
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 20, unit: 'MINUTES')
+        timeout(time: 30, unit: 'MINUTES')
         timestamps()
     }
     
     stages {
-        stage('Checkout & Setup') {
+        stage('Checkout') {
             steps {
                 script {
-                    echo "🔄 Starting build #${BUILD_NUMBER} at ${BUILD_TIMESTAMP}"
-                    echo "📍 Git commit: ${GIT_COMMIT_SHORT}"
-                    
+                    echo "🔄 Checking out code from repository..."
+                    echo "Build #${BUILD_NUMBER} started at ${BUILD_TIMESTAMP}"
                     try {
                         checkout scm
                         echo "✅ Code checkout successful"
-                        
-                        // Check for source files
-                        def pythonFiles = sh(script: 'find . -name "*.py" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
-                        def htmlFiles = sh(script: 'find . -name "*.html" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
-                        def cssFiles = sh(script: 'find . -name "*.css" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
-                        def jsFiles = sh(script: 'find . -name "*.js" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
-                        def phpFiles = sh(script: 'find . -name "*.php" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
-                        
-                        def totalFiles = pythonFiles.toInteger() + htmlFiles.toInteger() + cssFiles.toInteger() + jsFiles.toInteger() + phpFiles.toInteger()
-                        echo "📊 Found files - Python: ${pythonFiles}, HTML: ${htmlFiles}, CSS: ${cssFiles}, JS: ${jsFiles}, PHP: ${phpFiles}"
-                        
-                        if (totalFiles == 0) {
-                            echo "ℹ️ No source code files found - skipping validation"
-                            env.VALIDATION_STATUS = 'SKIPPED'
-                        } else {
-                            echo "✅ Found ${totalFiles} source files - proceeding with validation"
-                            env.VALIDATION_STATUS = 'READY'
-                        }
-                        
+                        echo "📍 Git commit: ${GIT_COMMIT_SHORT}"
                     } catch (Exception e) {
-                        echo "❌ Setup failed: ${e.getMessage()}"
+                        echo "❌ Checkout failed: ${e.getMessage()}"
                         currentBuild.result = 'FAILURE'
-                        error("Setup stage failed")
+                        error("Repository checkout failed")
                     }
                 }
             }
         }
         
-        stage('Critical Error Validation') {
+        stage('Pre-Validation Check') {
+            steps {
+                script {
+                    echo "🔍 Checking for source code files..."
+                    def htmlFiles = sh(script: 'find . -name "*.html" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
+                    def cssFiles = sh(script: 'find . -name "*.css" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
+                    def jsFiles = sh(script: 'find . -name "*.js" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
+                    def pythonFiles = sh(script: 'find . -name "*.py" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
+                    def phpFiles = sh(script: 'find . -name "*.php" -not -path "./node_modules/*" -not -path "./.git/*" | wc -l', returnStdout: true).trim()
+                    echo "📊 Found files - HTML: ${htmlFiles}, CSS: ${cssFiles}, JS: ${jsFiles}, Python: ${pythonFiles}, PHP: ${phpFiles}"
+                    if (htmlFiles.toInteger() == 0 && cssFiles.toInteger() == 0 && jsFiles.toInteger() == 0 && pythonFiles.toInteger() == 0 && phpFiles.toInteger() == 0) {
+                        echo "⚠️ No source code files found to validate"
+                        env.VALIDATION_STATUS = 'SKIPPED'
+                    } else {
+                        echo "✅ Source code files found, proceeding with validation"
+                    }
+                }
+            }
+        }
+        
+        stage('Code Validation') {
             when {
-                environment name: 'VALIDATION_STATUS', value: 'READY'
+                not { environment name: 'VALIDATION_STATUS', value: 'SKIPPED' }
             }
             steps {
                 script {
-                    echo "🔍 Checking for CRITICAL ERRORS ONLY (syntax errors, missing imports, etc.)"
-                    
+                    echo "🔍 Starting code validation..."
+                    echo "📋 Checking Python, HTML, CSS, JS, and PHP for critical errors"
                     try {
-                        sh 'chmod +x validate-critical-errors.sh'
-                        def validationResult = sh(
-                            script: './validate-critical-errors.sh',
-                            returnStatus: true
-                        )
-                        
+                        sh 'chmod +x validate-code.sh'
+                        def validationResult = sh(script: './validate-code.sh', returnStatus: true)
                         if (validationResult == 0) {
                             env.VALIDATION_STATUS = 'SUCCESS'
-                            echo "✅ No critical errors found - code should run without crashing"
+                            echo "✅ All validations passed or no critical errors found"
                         } else {
                             env.VALIDATION_STATUS = 'FAILED'
-                            echo "❌ CRITICAL ERRORS DETECTED - code will crash!"
-                            
-                            if (fileExists('critical_errors.txt')) {
-                                echo "🚨 Critical Error Report:"
-                                sh 'cat critical_errors.txt'
-                            }
-                            
+                            echo "❌ Critical errors detected"
                             currentBuild.result = 'FAILURE'
-                            error("Critical errors found that will cause program crashes")
+                            error("Critical validation errors detected")
                         }
-                        
                     } catch (Exception e) {
                         env.VALIDATION_STATUS = 'ERROR'
                         echo "💥 Validation failed: ${e.getMessage()}"
@@ -99,93 +89,32 @@ pipeline {
         stage('Build Summary') {
             steps {
                 script {
-                    echo "📊 BUILD SUMMARY"
-                    echo "================"
-                    echo "Build: #${BUILD_NUMBER}"
-                    echo "Time: ${BUILD_TIMESTAMP}"
-                    echo "Commit: ${GIT_COMMIT_SHORT}"
-                    echo "Status: ${env.VALIDATION_STATUS}"
-                    echo "Result: ${currentBuild.result ?: 'SUCCESS'}"
-                    
-                    // Show build history
-                    echo "\n📈 RECENT BUILD HISTORY:"
-                    def builds = []
-                    def currentJob = currentBuild
-                    for (int i = 0; i < 5 && currentJob != null; i++) {
-                        def status = currentJob.result ?: 'SUCCESS'
-                        def statusIcon = status == 'SUCCESS' ? '✅' : status == 'FAILURE' ? '❌' : '⚠️'
-                        builds.add("#${currentJob.number} - ${statusIcon} ${status}")
-                        currentJob = currentJob.previousBuild
-                    }
-                    builds.each { echo "  ${it}" }
-                    echo "================"
-                }
-            }
-        }
-        
-        stage('Archive Results') {
-            steps {
-                script {
-                    echo "📄 Archiving build results..."
-                    
-                    // Create build summary
-                    writeFile file: 'build-summary.txt', text: """
-BUILD SUMMARY REPORT
-===================
-Build Number: ${BUILD_NUMBER}
-Build Time: ${BUILD_TIMESTAMP}  
-Git Commit: ${GIT_COMMIT_SHORT}
-Validation Status: ${env.VALIDATION_STATUS}
-Build Result: ${currentBuild.result ?: 'SUCCESS'}
-Duration: ${currentBuild.durationString}
-===================
-"""
-                    
-                    // Archive all reports
-                    archiveArtifacts artifacts: 'build-summary.txt', allowEmptyArchive: true
-                    if (fileExists('critical_errors.txt')) {
-                        archiveArtifacts artifacts: 'critical_errors.txt', allowEmptyArchive: true
-                    }
-                    
-                    echo "✅ Results archived successfully"
+                    echo "📊 Build Summary"
+                    echo "Build Number: ${BUILD_NUMBER}"
+                    echo "Build Time: ${BUILD_TIMESTAMP}"
+                    echo "Git Commit: ${GIT_COMMIT_SHORT}"
+                    echo "Validation Status: ${env.VALIDATION_STATUS}"
+                    echo "Build Result: ${currentBuild.result ?: 'SUCCESS'}"
                 }
             }
         }
     }
     
     post {
+        always {
+            script {
+                echo "🔄 Post-build actions completed"
+            }
+        }
         success {
-            script {
-                echo "🎉 BUILD SUCCESSFUL!"
-                if (env.VALIDATION_STATUS == 'SKIPPED') {
-                    echo "ℹ️ No source files found to validate"
-                } else {
-                    echo "✅ All critical validations passed - code is safe to run"
-                }
-            }
+            echo "🎉 Build completed successfully"
         }
-        
         failure {
-            script {
-                echo "💥 BUILD FAILED!"
-                if (env.VALIDATION_STATUS == 'FAILED') {
-                    echo "🚨 Critical errors found that WILL cause crashes"
-                    echo "💡 Fix these errors before deployment:"
-                    echo "   - Python: Fix syntax errors, missing imports"
-                    echo "   - HTML: Fix unclosed tags, malformed structure"  
-                    echo "   - CSS: Fix syntax errors, invalid properties"
-                    echo "   - JS: Fix syntax errors, undefined variables"
-                    echo "   - PHP: Fix syntax errors, missing semicolons"
-                }
-            }
+            echo "💥 Build failed due to critical errors"
         }
-        
         cleanup {
-            script {
-                echo "🧹 Cleaning up..."
-                sh 'rm -f *.tmp || true'
-                echo "✨ Cleanup completed"
-            }
+            sh 'rm -f *.txt venv/ -r || true'
+            echo "🧹 Cleanup completed"
         }
     }
 }
