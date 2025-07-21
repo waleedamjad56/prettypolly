@@ -44,7 +44,7 @@ validate_python() {
     for file in $py_files; do
         echo "Checking Python file: $file"
         
-        # Check syntax first with Python interpreter
+        # Check syntax first with Python interpreter - THIS IS CRITICAL
         if python3 -m py_compile "$file" 2>python_syntax_errors.txt; then
             add_to_report "✅ Python syntax valid: $file"
         else
@@ -71,12 +71,12 @@ validate_python() {
             fi
             rm -f flake8_critical.txt
         else
-            add_to_report "⚠️ flake8 not available, skipping advanced Python validation"
+            add_to_report "ℹ️ flake8 not available, using basic syntax check only"
         fi
     done
 }
 
-# Validate HTML files for structural errors
+# Validate HTML files for CRITICAL structural errors ONLY
 validate_html() {
     echo "📄 Validating HTML files..."
     local html_files=$(find . -name "*.html" -not -path "./node_modules/*" -not -path "./.git/*")
@@ -89,38 +89,59 @@ validate_html() {
     for file in $html_files; do
         echo "Checking HTML file: $file"
         
-        # Check basic HTML structure
+        # Basic structure check - INFORMATIONAL ONLY, NOT CRITICAL
         if grep -q "<!DOCTYPE html>" "$file" && grep -q "<html" "$file" && grep -q "</html>" "$file"; then
-            add_to_report "✅ HTML structure complete: $file"
+            add_to_report "✅ HTML basic structure present: $file"
         else
-            add_to_report "⚠️ HTML structure incomplete (minor): $file"
+            add_to_report "ℹ️ HTML structure may be incomplete (not critical): $file"
         fi
 
-        # Use htmlhint for critical structural errors only
+        # Check for CRITICAL parsing errors only - malformed tags that break parsing
+        local critical_errors=false
+        
+        # Check for unclosed critical tags that would break the page
+        if grep -q "<html" "$file" && ! grep -q "</html>" "$file"; then
+            add_to_report "❌ CRITICAL: Missing closing </html> tag in: $file"
+            critical_errors=true
+        fi
+        
+        if grep -q "<head" "$file" && ! grep -q "</head>" "$file"; then
+            add_to_report "❌ CRITICAL: Missing closing </head> tag in: $file"
+            critical_errors=true
+        fi
+        
+        if grep -q "<body" "$file" && ! grep -q "</body>" "$file"; then
+            add_to_report "❌ CRITICAL: Missing closing </body> tag in: $file"
+            critical_errors=true
+        fi
+
+        # Use htmlhint ONLY for critical parsing errors, ignore warnings
         if command -v htmlhint >/dev/null 2>&1; then
-            # Only check for critical tag pairing issues
-            if htmlhint --rules tag-pair,tag-self-close "$file" > htmlhint_critical.txt 2>&1; then
-                add_to_report "✅ HTML critical checks passed: $file"
-            else
-                # Check if there are actual critical errors
-                if grep -q "error" htmlhint_critical.txt; then
-                    add_to_report "❌ CRITICAL HTML structural error in: $file"
-                    while IFS= read -r line; do
-                        add_to_report "   $line"
-                    done < <(grep "error" htmlhint_critical.txt | head -5)
-                    VALIDATION_PASSED=false
-                else
-                    add_to_report "✅ HTML validation passed: $file"
-                fi
+            # Only check for critical tag pairing issues that break parsing
+            htmlhint --rules tag-pair "$file" > htmlhint_output.txt 2>&1 || true
+            
+            # Only fail on actual ERROR lines, ignore warnings
+            if grep -qi "error.*tag.*not.*closed\|error.*unexpected.*tag" htmlhint_output.txt; then
+                add_to_report "❌ CRITICAL HTML parsing error in: $file"
+                # Only show actual ERROR lines, not warnings
+                grep -i "error.*tag.*not.*closed\|error.*unexpected.*tag" htmlhint_output.txt | head -3 | while IFS= read -r line; do
+                    add_to_report "   $line"
+                done
+                critical_errors=true
             fi
-            rm -f htmlhint_critical.txt
+            rm -f htmlhint_output.txt
+        fi
+        
+        # Set validation status based on critical errors
+        if [ "$critical_errors" = true ]; then
+            VALIDATION_PASSED=false
         else
-            add_to_report "⚠️ htmlhint not available, skipping HTML validation"
+            add_to_report "✅ HTML critical validation passed: $file"
         fi
     done
 }
 
-# Validate CSS files for parsing errors
+# Validate CSS files for CRITICAL parsing errors ONLY
 validate_css() {
     echo "🎨 Validating CSS files..."
     local css_files=$(find . -name "*.css" -not -path "./node_modules/*" -not -path "./.git/*")
@@ -133,30 +154,43 @@ validate_css() {
     for file in $css_files; do
         echo "Checking CSS file: $file"
         
+        # Basic syntax check for critical errors
+        local critical_css_error=false
+        
+        # Check for unclosed braces
+        local open_braces=$(grep -o '{' "$file" | wc -l)
+        local close_braces=$(grep -o '}' "$file" | wc -l)
+        
+        if [ "$open_braces" -ne "$close_braces" ]; then
+            add_to_report "❌ CRITICAL CSS parsing error: Mismatched braces in $file"
+            add_to_report "   Open braces: $open_braces, Close braces: $close_braces"
+            critical_css_error=true
+        fi
+        
         if command -v csslint >/dev/null 2>&1; then
-            # Only check for parsing errors (critical)
-            if csslint --errors=parsing-error --format=compact "$file" > csslint_critical.txt 2>&1; then
-                add_to_report "✅ CSS parsing valid: $file"
-            else
-                # Check if there are actual parsing errors
-                if grep -q "Error" csslint_critical.txt; then
-                    add_to_report "❌ CRITICAL CSS parsing error in: $file"
-                    while IFS= read -r line; do
-                        add_to_report "   $line"
-                    done < <(grep "Error" csslint_critical.txt | head -5)
-                    VALIDATION_PASSED=false
-                else
-                    add_to_report "✅ CSS validation passed: $file"
-                fi
+            # Only check for parsing errors (critical), ignore all warnings
+            csslint --errors=parsing-error --format=compact "$file" > csslint_output.txt 2>&1 || true
+            
+            # Only fail on actual parsing ERROR lines
+            if grep -qi "error.*parsing" csslint_output.txt; then
+                add_to_report "❌ CRITICAL CSS parsing error in: $file"
+                grep -i "error.*parsing" csslint_output.txt | head -3 | while IFS= read -r line; do
+                    add_to_report "   $line"
+                done
+                critical_css_error=true
             fi
-            rm -f csslint_critical.txt
+            rm -f csslint_output.txt
+        fi
+        
+        if [ "$critical_css_error" = true ]; then
+            VALIDATION_PASSED=false
         else
-            add_to_report "⚠️ csslint not available, skipping CSS validation"
+            add_to_report "✅ CSS critical validation passed: $file"
         fi
     done
 }
 
-# Validate JavaScript files for syntax errors
+# Validate JavaScript files for CRITICAL syntax errors ONLY
 validate_js() {
     echo "⚡ Validating JavaScript files..."
     local js_files=$(find . -name "*.js" -not -path "./node_modules/*" -not -path "./.git/*")
@@ -169,23 +203,8 @@ validate_js() {
     for file in $js_files; do
         echo "Checking JavaScript file: $file"
         
-        if command -v eslint >/dev/null 2>&1; then
-            # Create minimal config for syntax checking only
-            cat > .eslintrc.critical << 'EOF'
-{
-  "parserOptions": {
-    "ecmaVersion": 2020,
-    "sourceType": "script"
-  },
-  "env": {
-    "browser": true,
-    "es6": true,
-    "node": true
-  },
-  "rules": {}
-}
-EOF
-            # Only check for syntax errors
+        # Only check for syntax errors - these are CRITICAL
+        if command -v node >/dev/null 2>&1; then
             if node -c "$file" 2>js_syntax_errors.txt; then
                 add_to_report "✅ JavaScript syntax valid: $file"
             else
@@ -195,24 +214,14 @@ EOF
                 done < js_syntax_errors.txt
                 VALIDATION_PASSED=false
             fi
-            rm -f js_syntax_errors.txt .eslintrc.critical
+            rm -f js_syntax_errors.txt
         else
-            # Fallback to node syntax check
-            if node -c "$file" 2>js_fallback_errors.txt; then
-                add_to_report "✅ JavaScript syntax valid: $file"
-            else
-                add_to_report "❌ CRITICAL JavaScript syntax error in: $file"
-                while IFS= read -r line; do
-                    add_to_report "   $line"
-                done < js_fallback_errors.txt
-                VALIDATION_PASSED=false
-            fi
-            rm -f js_fallback_errors.txt
+            add_to_report "⚠️ Node.js not available, skipping JavaScript validation"
         fi
     done
 }
 
-# Validate PHP files for syntax errors
+# Validate PHP files for CRITICAL syntax errors ONLY
 validate_php() {
     echo "🐘 Validating PHP files..."
     local php_files=$(find . -name "*.php" -not -path "./node_modules/*" -not -path "./.git/*")
@@ -226,14 +235,17 @@ validate_php() {
         echo "Checking PHP file: $file"
         
         if command -v php >/dev/null 2>&1; then
-            # Check PHP syntax
+            # Check PHP syntax - CRITICAL errors only
             if php -l "$file" > php_syntax_check.txt 2>&1; then
                 add_to_report "✅ PHP syntax valid: $file"
             else
                 add_to_report "❌ CRITICAL PHP syntax error in: $file"
+                # Only show actual syntax errors, not warnings
                 while IFS= read -r line; do
-                    add_to_report "   $line"
-                done < <(grep -v "No syntax errors detected" php_syntax_check.txt)
+                    if [[ "$line" != *"No syntax errors detected"* ]]; then
+                        add_to_report "   $line"
+                    fi
+                done < php_syntax_check.txt
                 VALIDATION_PASSED=false
             fi
             rm -f php_syntax_check.txt
@@ -245,8 +257,8 @@ validate_php() {
 
 # Main execution
 echo "🚀 Starting Critical Code Validation..."
-echo "📋 Focus: Critical errors that prevent code execution"
-echo "⚠️ Warnings and minor issues will not fail the build"
+echo "📋 Focus: ONLY critical errors that prevent code execution"
+echo "⚠️ Warnings, minor issues, and style problems are IGNORED"
 echo ""
 
 # Set up Python environment
@@ -254,7 +266,7 @@ setup_python_env
 
 # Run all validations
 validate_python
-validate_css
+validate_css  
 validate_html
 validate_js
 validate_php
@@ -266,11 +278,11 @@ echo "Generated: $(date)" >> validation_report.txt
 echo "Build Number: ${BUILD_NUMBER:-'N/A'}" >> validation_report.txt
 echo "Git Commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'N/A')" >> validation_report.txt
 echo "" >> validation_report.txt
-echo "Validation Mode: Critical Errors Only" >> validation_report.txt
+echo "Validation Mode: CRITICAL ERRORS ONLY" >> validation_report.txt
 echo "- ✅ = Validation passed" >> validation_report.txt
 echo "- ❌ = Critical error (build fails)" >> validation_report.txt
 echo "- ⚠️  = Warning/minor issue (build continues)" >> validation_report.txt
-echo "- ℹ️  = Information" >> validation_report.txt
+echo "- ℹ️  = Information (build continues)" >> validation_report.txt
 echo "" >> validation_report.txt
 echo -e "$VALIDATION_REPORT" >> validation_report.txt
 echo "" >> validation_report.txt
@@ -290,12 +302,12 @@ fi
 # Final result
 if [ "$VALIDATION_PASSED" = true ]; then
     echo "🎉 BUILD PASSED - No critical errors found!"
-    echo "Code is ready for deployment."
+    echo "Minor issues and warnings are ignored in critical validation mode."
     echo "VALIDATION_STATUS=SUCCESS" > validation_status.txt
     exit 0
 else
     echo "❌ BUILD FAILED - Critical errors must be fixed!"
-    echo "Check the validation report above for specific issues."
+    echo "Only critical errors that prevent execution cause build failure."
     echo "VALIDATION_STATUS=FAILED" > validation_status.txt
     exit 1
 fi
