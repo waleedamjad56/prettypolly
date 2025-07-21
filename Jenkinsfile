@@ -2,181 +2,50 @@ pipeline {
     agent any
     
     environment {
-        // Build configuration
         BUILD_TIMESTAMP = sh(script: 'date "+%Y-%m-%d %H:%M:%S"', returnStdout: true).trim()
-        BUILD_VERSION = "${BUILD_NUMBER}-${GIT_COMMIT?.take(7) ?: 'unknown'}"
-        
-        // Validation configuration
         VALIDATION_STATUS = ''
-        DEPLOY_STATUS = ''
-        
-        // Tool paths (matching your Docker setup)
-        NODE_VERSION = '20'
-        PHP_VERSION = '8.1'
-        
-        // Security settings
-        JAVA_OPTS = '-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false'
-    }
-    
-    options {
-        // Build retention
-        buildDiscarder(logRotator(
-            numToKeepStr: '10',
-            daysToKeepStr: '30',
-            artifactNumToKeepStr: '5'
-        ))
-        
-        // Timeout protection
-        timeout(time: 30, unit: 'MINUTES')
-        
-        // Concurrent builds
-        disableConcurrentBuilds()
-        
-        // Timestamps in console
-        timestamps()
-        
-        // ANSI color support
-        ansiColor('xterm')
+        BUILD_STATUS = 'SUCCESS'
     }
     
     triggers {
         githubPush()
-        pollSCM('H/5 * * * *') // Poll every 5 minutes as backup
     }
     
     stages {
-        stage('Initialize') {
+        stage('Checkout') {
             steps {
                 script {
-                    echo "🚀 Starting Jenkins Pipeline"
-                    echo "📅 Build Timestamp: ${env.BUILD_TIMESTAMP}"
-                    echo "🔢 Build Version: ${env.BUILD_VERSION}"
-                    echo "🌿 Branch: ${env.BRANCH_NAME ?: 'main'}"
+                    echo "🔄 Checking out code from repository..."
+                    try {
+                        checkout scm
+                        echo "✅ Code checkout completed successfully"
+                    } catch (Exception e) {
+                        echo "❌ Failed to checkout code: ${e.getMessage()}"
+                        currentBuild.result = 'FAILURE'
+                        error("Checkout failed")
+                    }
+                }
+            }
+        }
+        
+        stage('Environment Check') {
+            steps {
+                script {
+                    echo "🔧 Checking validation tools availability..."
                     
-                    // Create build info
-                    writeFile file: 'build-info.json', text: """
-{
-    "buildNumber": "${BUILD_NUMBER}",
-    "buildVersion": "${BUILD_VERSION}",
-    "timestamp": "${BUILD_TIMESTAMP}",
-    "branch": "${env.BRANCH_NAME ?: 'main'}",
-    "commit": "${GIT_COMMIT ?: 'unknown'}",
-    "jenkinsUrl": "${JENKINS_URL}",
-    "jobName": "${JOB_NAME}"
-}
-"""
-                }
-            }
-        }
-        
-        stage('Checkout & Analysis') {
-            parallel {
-                stage('Code Checkout') {
-                    steps {
-                        script {
-                            echo "📥 Checking out source code..."
-                            
-                            try {
-                                checkout scm
-                                
-                                // Get commit info
-                                env.GIT_COMMIT_MSG = sh(
-                                    script: 'git log -1 --pretty=%B',
-                                    returnStdout: true
-                                ).trim()
-                                
-                                env.GIT_AUTHOR = sh(
-                                    script: 'git log -1 --pretty=%an',
-                                    returnStdout: true
-                                ).trim()
-                                
-                                echo "📝 Commit: ${env.GIT_COMMIT_MSG}"
-                                echo "👤 Author: ${env.GIT_AUTHOR}"
-                                
-                            } catch (Exception e) {
-                                error "❌ Failed to checkout code: ${e.getMessage()}"
-                            }
-                        }
-                    }
-                }
-                
-                stage('Environment Check') {
-                    steps {
-                        script {
-                            echo "🔍 Checking build environment..."
-                            
-                            // Check available tools (matching your Docker setup)
-                            def tools = [
-                                'node --version': 'Node.js',
-                                'npm --version': 'NPM',
-                                'php --version': 'PHP',
-                                'composer --version': 'Composer',
-                                'eslint --version': 'ESLint',
-                                'htmlhint --version': 'HTMLHint',
-                                'csslint --version': 'CSSLint',
-                                'git --version': 'Git'
-                            ]
-                            
-                            def toolStatus = [:]
-                            tools.each { cmd, name ->
-                                try {
-                                    def version = sh(script: cmd, returnStdout: true).trim()
-                                    toolStatus[name] = "✅ Available: ${version.split('\n')[0]}"
-                                    echo "${name}: ${version.split('\n')[0]}"
-                                } catch (Exception e) {
-                                    toolStatus[name] = "❌ Not available"
-                                    echo "⚠️ ${name}: Not available"
-                                }
-                            }
-                            
-                            // Save tool status
-                            writeFile file: 'tool-status.json', text: groovy.json.JsonBuilder(toolStatus).toPrettyString()
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Dependency Installation') {
-            parallel {
-                stage('Node.js Dependencies') {
-                    when {
-                        expression { fileExists('package.json') }
-                    }
-                    steps {
-                        script {
-                            echo "📦 Installing Node.js dependencies..."
-                            try {
-                                sh '''
-                                    npm ci --production=false
-                                    npm list --depth=0 || true
-                                '''
-                                echo "✅ Node.js dependencies installed successfully"
-                            } catch (Exception e) {
-                                echo "⚠️ Node.js dependency installation had issues: ${e.getMessage()}"
-                                // Don't fail the build for dependency warnings
-                            }
-                        }
-                    }
-                }
-                
-                stage('PHP Dependencies') {
-                    when {
-                        expression { fileExists('composer.json') }
-                    }
-                    steps {
-                        script {
-                            echo "🐘 Installing PHP dependencies..."
-                            try {
-                                sh '''
-                                    composer install --no-dev --optimize-autoloader
-                                    composer show --installed || true
-                                '''
-                                echo "✅ PHP dependencies installed successfully"
-                            } catch (Exception e) {
-                                echo "⚠️ PHP dependency installation had issues: ${e.getMessage()}"
-                                // Don't fail the build for dependency warnings
-                            }
+                    def tools = [
+                        'htmlhint': 'HTML validation',
+                        'eslint': 'JavaScript validation', 
+                        'csslint': 'CSS validation',
+                        'tidy': 'HTML syntax checking'
+                    ]
+                    
+                    tools.each { tool, description ->
+                        def toolAvailable = sh(script: "command -v ${tool}", returnStatus: true) == 0
+                        if (toolAvailable) {
+                            echo "✅ ${description} tool (${tool}) is available"
+                        } else {
+                            echo "⚠️ ${description} tool (${tool}) not found - validation will be skipped"
                         }
                     }
                 }
@@ -192,317 +61,103 @@ pipeline {
                         // Make validation script executable
                         sh 'chmod +x validate-code.sh'
                         
-                        // Run validation with proper error handling
-                        def validationResult = sh(
-                            script: './validate-code.sh',
-                            returnStatus: true
-                        )
+                        // Run validation and capture result
+                        def validationResult = sh(script: './validate-code.sh', returnStatus: true)
                         
-                        // Check validation results
                         if (validationResult == 0) {
                             env.VALIDATION_STATUS = 'SUCCESS'
-                            echo "✅ Code validation passed!"
-                            
-                            // Check for warnings
-                            if (fileExists('validation_report.txt')) {
-                                def report = readFile('validation_report.txt')
-                                if (report.contains('⚠️')) {
-                                    echo "⚠️ Validation passed with warnings - check report for details"
-                                }
-                            }
+                            env.BUILD_STATUS = 'SUCCESS'
+                            echo "✅ Code validation passed - No critical errors found!"
                         } else {
                             env.VALIDATION_STATUS = 'FAILED'
-                            echo "❌ Code validation failed!"
+                            env.BUILD_STATUS = 'FAILED'
+                            echo "❌ Code validation failed - Critical errors detected!"
                             
-                            // Read and display validation errors
+                            // Display validation report if available
                             if (fileExists('validation_report.txt')) {
-                                echo "📋 Validation Report:"
+                                echo "📄 Validation Report:"
                                 sh 'cat validation_report.txt'
                             }
                             
                             currentBuild.result = 'FAILURE'
-                            error "Code validation failed. Build cannot proceed."
+                            error("Critical validation errors found - Build stopped to prevent broken deployment")
                         }
                         
                     } catch (Exception e) {
                         env.VALIDATION_STATUS = 'ERROR'
-                        echo "💥 Validation script error: ${e.getMessage()}"
+                        env.BUILD_STATUS = 'ERROR'
+                        echo "💥 Validation process encountered an error: ${e.getMessage()}"
                         currentBuild.result = 'FAILURE'
-                        error "Validation script execution failed: ${e.getMessage()}"
+                        error("Validation process failed")
                     }
                 }
             }
             post {
                 always {
                     script {
-                        // Archive validation artifacts
-                        def artifacts = [
-                            'validation_report.txt',
-                            'validation_status.txt',
-                            'build-info.json',
-                            'tool-status.json'
-                        ]
+                        echo "📋 Archiving validation artifacts..."
                         
-                        artifacts.each { artifact ->
-                            if (fileExists(artifact)) {
-                                archiveArtifacts artifacts: artifact, allowEmptyArchive: true
-                                echo "📁 Archived: ${artifact}"
-                            }
-                        }
-                        
-                        // Publish HTML reports
+                        // Archive validation reports
                         if (fileExists('validation_report.txt')) {
-                            publishHTML([
-                                allowMissing: false,
-                                alwaysLinkToLastBuild: true,
-                                keepAll: true,
-                                reportDir: '.',
-                                reportFiles: 'validation_report.txt',
-                                reportName: 'Code Validation Report',
-                                reportTitles: 'Validation Results'
-                            ])
-                            echo "📊 Published validation report"
+                            archiveArtifacts artifacts: 'validation_report.txt', 
+                                           allowEmptyArchive: true,
+                                           fingerprint: true
+                            echo "✅ Validation report archived"
+                        }
+                        
+                        if (fileExists('validation_status.txt')) {
+                            archiveArtifacts artifacts: 'validation_status.txt', 
+                                           allowEmptyArchive: true,
+                                           fingerprint: true
+                        }
+                        
+                        // Publish HTML report using existing htmlpublisher plugin
+                        if (fileExists('validation_report.txt')) {
+                            try {
+                                publishHTML([
+                                    allowMissing: false,
+                                    alwaysLinkToLastBuild: true,
+                                    keepAll: true,
+                                    reportDir: '.',
+                                    reportFiles: 'validation_report.txt',
+                                    reportName: 'Code Validation Report',
+                                    reportTitles: 'Validation Results'
+                                ])
+                                echo "✅ HTML validation report published"
+                            } catch (Exception e) {
+                                echo "⚠️ Could not publish HTML report: ${e.getMessage()}"
+                            }
                         }
                     }
                 }
             }
         }
         
-        stage('Security Scan') {
+        stage('Build Summary') {
             when {
                 expression { env.VALIDATION_STATUS == 'SUCCESS' }
             }
             steps {
                 script {
-                    echo "🔒 Running security checks..."
+                    echo "📊 Build Summary:"
+                    echo "   Build Number: ${env.BUILD_NUMBER}"
+                    echo "   Build Timestamp: ${env.BUILD_TIMESTAMP}"
+                    echo "   Validation Status: ${env.VALIDATION_STATUS}"
+                    echo "   Git Commit: ${sh(script: 'git rev-parse --short HEAD 2>/dev/null || echo "N/A"', returnStdout: true).trim()}"
                     
-                    try {
-                        // Basic security checks
-                        sh '''
-                            echo "Checking for sensitive data patterns..."
-                            
-                            # Check for potential secrets
-                            if grep -r -i --exclude-dir=node_modules --exclude-dir=.git \
-                                -E "(password|secret|key|token)\\s*[:=]\\s*['\"][^'\"]{8,}" . || true; then
-                                echo "⚠️ Potential secrets detected - review manually"
-                            fi
-                            
-                            # Check for SQL injection patterns
-                            if grep -r -i --exclude-dir=node_modules --exclude-dir=.git \
-                                -E "\\$_(GET|POST|REQUEST).*sql" . || true; then
-                                echo "⚠️ Potential SQL injection patterns detected"
-                            fi
-                            
-                            echo "✅ Basic security scan completed"
-                        '''
-                        
-                        echo "✅ Security scan completed"
-                        
-                    } catch (Exception e) {
-                        echo "⚠️ Security scan had issues: ${e.getMessage()}"
-                        // Don't fail build for security scan issues
-                    }
-                }
-            }
-        }
-        
-        stage('Build Assets') {
-            when {
-                expression { env.VALIDATION_STATUS == 'SUCCESS' }
-            }
-            parallel {
-                stage('Frontend Build') {
-                    when {
-                        expression { fileExists('package.json') }
-                    }
-                    steps {
-                        script {
-                            echo "🏗️ Building frontend assets..."
-                            try {
-                                sh '''
-                                    if [ -f "package.json" ] && grep -q '"build"' package.json; then
-                                        npm run build
-                                        echo "✅ Frontend build completed"
-                                    else
-                                        echo "ℹ️ No build script found in package.json"
-                                    fi
-                                '''
-                            } catch (Exception e) {
-                                echo "⚠️ Frontend build had issues: ${e.getMessage()}"
-                                // Continue with warnings
-                            }
-                        }
-                    }
-                }
-                
-                stage('Backend Build') {
-                    when {
-                        expression { fileExists('composer.json') }
-                    }
-                    steps {
-                        script {
-                            echo "🐘 Preparing backend assets..."
-                            try {
-                                sh '''
-                                    if [ -f "composer.json" ]; then
-                                        composer dump-autoload --optimize
-                                        echo "✅ Backend optimization completed"
-                                    fi
-                                '''
-                            } catch (Exception e) {
-                                echo "⚠️ Backend build had issues: ${e.getMessage()}"
-                                // Continue with warnings
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Testing') {
-            when {
-                expression { env.VALIDATION_STATUS == 'SUCCESS' }
-            }
-            parallel {
-                stage('Unit Tests') {
-                    steps {
-                        script {
-                            echo "🧪 Running unit tests..."
-                            try {
-                                sh '''
-                                    # Node.js tests
-                                    if [ -f "package.json" ] && grep -q '"test"' package.json; then
-                                        npm test || echo "⚠️ Some Node.js tests failed"
-                                    fi
-                                    
-                                    # PHP tests
-                                    if [ -f "phpunit.xml" ] || [ -f "phpunit.xml.dist" ]; then
-                                        ./vendor/bin/phpunit || echo "⚠️ Some PHP tests failed"
-                                    fi
-                                    
-                                    echo "✅ Testing phase completed"
-                                '''
-                            } catch (Exception e) {
-                                echo "⚠️ Testing had issues: ${e.getMessage()}"
-                                // Continue with warnings for tests
-                            }
-                        }
-                    }
-                }
-                
-                stage('Performance Check') {
-                    steps {
-                        script {
-                            echo "⚡ Running performance checks..."
-                            try {
-                                sh '''
-                                    # Basic file size checks
-                                    echo "Checking asset sizes..."
-                                    find . -name "*.js" -not -path "./node_modules/*" -exec ls -lh {} \\; | head -10
-                                    find . -name "*.css" -not -path "./node_modules/*" -exec ls -lh {} \\; | head -10
-                                    
-                                    echo "✅ Performance check completed"
-                                '''
-                            } catch (Exception e) {
-                                echo "⚠️ Performance check had issues: ${e.getMessage()}"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Deployment Preparation') {
-            when {
-                expression { env.VALIDATION_STATUS == 'SUCCESS' }
-            }
-            steps {
-                script {
-                    echo "📦 Preparing deployment package..."
+                    // Count files validated
+                    def htmlFiles = sh(script: 'find . -name "*.html" -not -path "./node_modules/*" | wc -l', returnStdout: true).trim()
+                    def cssFiles = sh(script: 'find . -name "*.css" -not -path "./node_modules/*" | wc -l', returnStdout: true).trim()
+                    def jsFiles = sh(script: 'find . -name "*.js" -not -path "./node_modules/*" | wc -l', returnStdout: true).trim()
                     
-                    try {
-                        sh '''
-                            # Create deployment directory
-                            mkdir -p deployment
-                            
-                            # Copy application files (exclude development files)
-                            rsync -av --progress . deployment/ \
-                                --exclude node_modules \
-                                --exclude .git \
-                                --exclude .gitignore \
-                                --exclude deployment \
-                                --exclude "*.log" \
-                                --exclude ".env*" \
-                                --exclude "tests/" \
-                                --exclude "test/" \
-                                --exclude "__tests__/"
-                            
-                            # Create deployment info
-                            cat > deployment/deployment-info.txt << EOF
-Deployment Package Information
-==============================
-Build Number: ${BUILD_NUMBER}
-Build Version: ${BUILD_VERSION}
-Timestamp: ${BUILD_TIMESTAMP}
-Branch: ${BRANCH_NAME}
-Commit: ${GIT_COMMIT}
-Commit Message: ${GIT_COMMIT_MSG}
-Author: ${GIT_AUTHOR}
-Jenkins Job: ${JOB_NAME}
-Jenkins URL: ${BUILD_URL}
-EOF
-                            
-                            echo "✅ Deployment package prepared"
-                        '''
-                        
-                        env.DEPLOY_STATUS = 'READY'
-                        
-                    } catch (Exception e) {
-                        env.DEPLOY_STATUS = 'FAILED'
-                        echo "❌ Deployment preparation failed: ${e.getMessage()}"
-                        currentBuild.result = 'FAILURE'
-                        error "Failed to prepare deployment package"
-                    }
-                }
-            }
-        }
-        
-        stage('Archive & Cleanup') {
-            steps {
-                script {
-                    echo "🗄️ Archiving build artifacts..."
+                    echo "   Files Validated:"
+                    echo "     - HTML files: ${htmlFiles}"
+                    echo "     - CSS files: ${cssFiles}"
+                    echo "     - JavaScript files: ${jsFiles}"
                     
-                    try {
-                        // Archive deployment package
-                        if (fileExists('deployment/')) {
-                            sh '''
-                                cd deployment
-                                tar -czf ../deployment-package-${BUILD_NUMBER}.tar.gz .
-                                cd ..
-                            '''
-                            
-                            archiveArtifacts artifacts: 'deployment-package-*.tar.gz', allowEmptyArchive: false
-                            echo "📁 Deployment package archived"
-                        }
-                        
-                        // Archive logs and reports
-                        sh '''
-                            # Collect all logs and reports
-                            mkdir -p build-artifacts
-                            
-                            # Copy all txt and json files to artifacts
-                            find . -maxdepth 1 -name "*.txt" -o -name "*.json" | while read file; do
-                                cp "$file" build-artifacts/ 2>/dev/null || true
-                            done
-                            
-                            echo "✅ Artifacts collected"
-                        '''
-                        
-                        archiveArtifacts artifacts: 'build-artifacts/*', allowEmptyArchive: true
-                        
-                    } catch (Exception e) {
-                        echo "⚠️ Archiving had issues: ${e.getMessage()}"
-                        // Don't fail build for archiving issues
+                    if (fileExists('validation_report.txt')) {
+                        def reportSize = sh(script: 'wc -l < validation_report.txt', returnStdout: true).trim()
+                        echo "   Validation report: ${reportSize} lines generated"
                     }
                 }
             }
@@ -514,107 +169,88 @@ EOF
             script {
                 echo "🔄 Post-build cleanup and reporting..."
                 
-                // Calculate build duration
-                def duration = currentBuild.duration ? "${currentBuild.duration / 1000}s" : "unknown"
+                // Generate build metadata
+                def buildMetadata = [
+                    buildNumber: env.BUILD_NUMBER,
+                    buildTimestamp: env.BUILD_TIMESTAMP,
+                    validationStatus: env.VALIDATION_STATUS ?: 'UNKNOWN',
+                    buildStatus: env.BUILD_STATUS ?: 'UNKNOWN',
+                    gitCommit: sh(script: 'git rev-parse HEAD 2>/dev/null || echo "N/A"', returnStdout: true).trim(),
+                    jenkinsUrl: env.JENKINS_URL ?: 'http://172.86.108.103:9000'
+                ]
                 
-                // Generate final build report
-                def buildStatus = currentBuild.result ?: 'SUCCESS'
-                def reportContent = """
-=== JENKINS BUILD REPORT ===
-Build Number: ${BUILD_NUMBER}
-Build Version: ${BUILD_VERSION}
-Status: ${buildStatus}
-Duration: ${duration}
-Timestamp: ${BUILD_TIMESTAMP}
-Branch: ${env.BRANCH_NAME ?: 'main'}
-Commit: ${env.GIT_COMMIT ?: 'unknown'}
-Author: ${env.GIT_AUTHOR ?: 'unknown'}
-Validation: ${env.VALIDATION_STATUS ?: 'UNKNOWN'}
-Deployment: ${env.DEPLOY_STATUS ?: 'NOT_ATTEMPTED'}
-Jenkins URL: ${BUILD_URL}
-============================
-"""
-                
-                writeFile file: 'final-build-report.txt', text: reportContent
-                archiveArtifacts artifacts: 'final-build-report.txt', allowEmptyArchive: true
-                
-                echo reportContent
+                writeJSON file: 'build_metadata.json', json: buildMetadata
+                archiveArtifacts artifacts: 'build_metadata.json', allowEmptyArchive: true
             }
         }
         
         success {
             script {
                 echo "🎉 BUILD SUCCESSFUL!"
-                echo "✅ All stages completed successfully"
-                echo "📦 Deployment package is ready"
-                echo "🔗 Build URL: ${BUILD_URL}"
+                echo "   ✅ All validations passed"
+                echo "   ✅ Code is ready for deployment"
+                echo "   📊 Check validation report for details"
+                
+                // Set build description
+                currentBuild.description = "✅ Validation Passed - Build ${env.BUILD_NUMBER}"
             }
         }
         
         failure {
             script {
                 echo "💥 BUILD FAILED!"
-                echo "❌ Check the console output and reports for details"
-                echo "🔗 Build URL: ${BUILD_URL}"
+                echo "   ❌ Critical validation errors detected"
+                echo "   🔍 Check validation report for specific issues"
+                echo "   🛠️ Fix errors before retrying deployment"
                 
-                // Try to identify failure reason
-                if (env.VALIDATION_STATUS == 'FAILED') {
-                    echo "🔍 Failure Reason: Code validation failed"
-                } else if (env.DEPLOY_STATUS == 'FAILED') {
-                    echo "🔍 Failure Reason: Deployment preparation failed"
-                } else {
-                    echo "🔍 Failure Reason: Check build logs"
+                // Set build description
+                currentBuild.description = "❌ Validation Failed - Build ${env.BUILD_NUMBER}"
+                
+                // Display quick error summary if available
+                if (fileExists('validation_report.txt')) {
+                    echo "📄 Quick Error Summary:"
+                    sh 'grep "❌" validation_report.txt | head -5 || echo "No specific error markers found"'
                 }
             }
         }
         
         unstable {
             script {
-                echo "⚠️ BUILD UNSTABLE"
-                echo "🔍 Some tests or checks reported warnings"
-                echo "📋 Review validation and test reports"
+                echo "⚠️ BUILD UNSTABLE!"
+                echo "   🔍 Some issues detected but build continues"
+                currentBuild.description = "⚠️ Unstable - Build ${env.BUILD_NUMBER}"
             }
         }
         
         aborted {
             script {
-                echo "🛑 BUILD ABORTED"
-                echo "⏰ Build was cancelled or timed out"
+                echo "🛑 BUILD ABORTED!"
+                echo "   ℹ️ Build was manually stopped or timed out"
+                currentBuild.description = "🛑 Aborted - Build ${env.BUILD_NUMBER}"
             }
         }
         
         cleanup {
             script {
-                echo "🧹 Cleaning up workspace..."
+                echo "🧹 Performing workspace cleanup..."
                 
                 try {
-                    // Clean up temporary files but keep important artifacts
+                    // Clean temporary files but keep important artifacts
                     sh '''
-                        # Remove large temporary directories
-                        rm -rf node_modules/ || true
-                        rm -rf vendor/ || true
-                        rm -rf deployment/ || true
-                        
-                        # Clean up temporary files
-                        find . -name "*.tmp" -delete || true
-                        find . -name "*.temp" -delete || true
-                        
-                        echo "✅ Cleanup completed"
+                        rm -f *.tmp
+                        rm -f *_errors.txt
+                        rm -f .eslintrc.tmp
+                        rm -f inline_*.tmp
                     '''
+                    
+                    echo "✅ Cleanup completed successfully"
+                    
+                    // Don't clean entire workspace to preserve artifacts
+                    // cleanWs() - Removed to keep validation reports accessible
+                    
                 } catch (Exception e) {
-                    echo "⚠️ Cleanup had issues: ${e.getMessage()}"
-                    // Don't fail for cleanup issues
+                    echo "⚠️ Cleanup encountered issues: ${e.getMessage()}"
                 }
-                
-                // Final workspace cleanup
-                cleanWs(
-                    cleanWhenAborted: true,
-                    cleanWhenFailure: false,  // Keep workspace for debugging failures
-                    cleanWhenNotBuilt: true,
-                    cleanWhenSuccess: true,
-                    cleanWhenUnstable: false, // Keep workspace for debugging unstable builds
-                    deleteDirs: true
-                )
             }
         }
     }
