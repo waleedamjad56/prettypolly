@@ -5,7 +5,8 @@ pipeline {
         GITHUB_CREDENTIALS = 'github-pat'
         VALIDATION_STATUS = ''
         BUILD_TIMESTAMP = sh(script: 'date "+%Y-%m-%d %H:%M:%S"', returnStdout: true).trim()
-        NOTIFICATION_EMAILS = 'kencypher56@gmail.com,rottinken@gmail.com'
+        // EMAIL SETTINGS NOW COME FROM DOCKER ENVIRONMENT VARIABLES
+        // NO HARDCODED EMAILS IN PIPELINE - SECURITY BEST PRACTICE
     }
 
     triggers {
@@ -71,6 +72,14 @@ pipeline {
     post {
         always {
             script {
+                // Get email settings from environment variables (set in Docker)
+                def notificationEmails = System.getenv('NOTIFICATION_EMAILS') ?: 'fallback@example.com'
+                def smtpUser = System.getenv('SMTP_USER') ?: 'no-smtp-user'
+                
+                echo "📧 Preparing email notification..."
+                echo "Email recipients: ${notificationEmails}"
+                echo "SMTP user: ${smtpUser}"
+
                 // Read validation report for email content
                 def validationReport = ""
                 if (fileExists('validation_report.txt')) {
@@ -134,6 +143,8 @@ pipeline {
                                 <tr><td style="padding: 5px; font-weight: bold;">Duration:</td><td style="padding: 5px;">${buildDuration}</td></tr>
                                 <tr><td style="padding: 5px; font-weight: bold;">Git Branch:</td><td style="padding: 5px;">${gitBranch}</td></tr>
                                 <tr><td style="padding: 5px; font-weight: bold;">Git Commit:</td><td style="padding: 5px;">${gitCommit.take(8)}</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">SMTP Server:</td><td style="padding: 5px;">smtp.privateemail.com:587</td></tr>
+                                <tr><td style="padding: 5px; font-weight: bold;">Email From:</td><td style="padding: 5px;">${smtpUser}</td></tr>
                             </table>
                         </div>
 
@@ -159,27 +170,31 @@ pipeline {
                         <div style="background-color: #e8f4f8; padding: 10px; border-radius: 5px; margin: 10px 0; font-size: 12px; color: #666;">
                             <p><strong>Jenkins Server:</strong> ${env.JENKINS_URL}</p>
                             <p><strong>Notification sent:</strong> ${new Date().format('yyyy-MM-dd HH:mm:ss')}</p>
+                            <p><strong>Recipients:</strong> ${notificationEmails}</p>
                         </div>
                     </div>
                 </body>
                 </html>
                 """
 
-                // Send email notification
-                echo "📧 Sending email notification..."
+                // Send email notification with improved error handling
+                echo "📧 Sending email notification to: ${notificationEmails}"
                 try {
                     emailext (
                         subject: emailSubject,
                         body: emailBody,
                         mimeType: 'text/html',
-                        to: env.NOTIFICATION_EMAILS,
+                        to: notificationEmails,
+                        from: smtpUser,
+                        replyTo: smtpUser,
                         attachLog: true,
                         compressLog: true,
                         attachmentsPattern: 'validation_report.txt,validation_status.txt'
                     )
-                    echo "✅ Email notification sent successfully!"
+                    echo "✅ Email notification sent successfully to: ${notificationEmails}!"
                 } catch (Exception e) {
                     echo "❌ Failed to send email notification: ${e.getMessage()}"
+                    echo "💡 Check SMTP settings and credentials in Docker environment"
                     // Don't fail the build if email fails
                 }
             }
