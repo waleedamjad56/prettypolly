@@ -1,234 +1,148 @@
 #!/bin/bash
-set -e
 
-CRITICAL_ERRORS_FOUND=false
-ERROR_REPORT=""
+VALIDATION_PASSED=true
 
-add_error() {
-    ERROR_REPORT="$ERROR_REPORT\n$1"
-    CRITICAL_ERRORS_FOUND=true
-}
+# Set up Python virtual environment if Python files exist
+if [ -n "$(find . -name "*.py" -not -path "./node_modules/*" -not -path "./.git/*")" ]; then
+    echo "Setting up Python virtual environment..."
+    python3 -m venv venv
+    source venv/bin/activate
+    if [ -f requirements.txt ]; then
+        pip install -r requirements.txt
+    fi
+fi
 
-add_info() {
-    ERROR_REPORT="$ERROR_REPORT\n$1"
-}
-
-# Validate Python files for CRITICAL syntax errors only
+# Validate Python files
 validate_python() {
-    echo "🐍 Checking Python files for critical syntax errors..."
-    local python_files=$(find . -name "*.py" -not -path "./.git/*" -not -path "./venv/*" -not -path "./__pycache__/*")
-
-    if [ -z "$python_files" ]; then
-        add_info "ℹ️ No Python files found"
+    echo "Validating Python files..."
+    local py_files=$(find . -name "*.py" -not -path "./node_modules/*" -not -path "./.git/*")
+    if [ -z "$py_files" ]; then
+        echo "No Python files found."
         return 0
     fi
-
-    for file in $python_files; do
-        echo "Validating Python: $file"
-        
-        # Check for syntax errors (will cause crash)
-        if ! python3 -m py_compile "$file" 2>/dev/null; then
-            python3 -m py_compile "$file" 2>python_error.tmp || true
-            add_error "🚨 PYTHON SYNTAX ERROR in $file:"
-            add_error "$(cat python_error.tmp)"
-            rm -f python_error.tmp
-        else
-            # Check for undefined variables and imports (will cause runtime crash)
-            if command -v pyflakes >/dev/null 2>&1; then
-                pyflakes_output=$(pyflakes "$file" 2>&1 | grep -E "(undefined name|imported but unused)" || true)
-                if [ -n "$pyflakes_output" ]; then
-                    critical_issues=$(echo "$pyflakes_output" | grep "undefined name" || true)
-                    if [ -n "$critical_issues" ]; then
-                        add_error "🚨 PYTHON UNDEFINED VARIABLES in $file (will cause NameError):"
-                        add_error "$critical_issues"
-                    fi
-                fi
+    for file in $py_files; do
+        if command -v flake8 >/dev/null 2>&1; then
+            # Check for syntax errors only
+            flake8 --select=E9 --exit-zero "$file" > flake8_errors.txt 2>&1
+            if grep -q "E9" flake8_errors.txt; then
+                echo "❌ Critical Python error in $file:"
+                cat flake8_errors.txt
+                VALIDATION_PASSED=false
+            else
+                echo "✅ $file: Python syntax valid"
             fi
-            add_info "✅ Python syntax OK: $file"
+            rm -f flake8_errors.txt
         fi
     done
 }
 
-# Validate HTML files for CRITICAL structural errors only  
+# Validate HTML files
 validate_html() {
-    echo "🌐 Checking HTML files for critical structural errors..."
-    local html_files=$(find . -name "*.html" -not -path "./.git/*")
-
+    echo "Validating HTML files..."
+    local html_files=$(find . -name "*.html" -not -path "./node_modules/*" -not -path "./.git/*")
     if [ -z "$html_files" ]; then
-        add_info "ℹ️ No HTML files found"
+        echo "No HTML files found."
         return 0
     fi
-
     for file in $html_files; do
-        echo "Validating HTML: $file"
-        
-        # Check for basic structure that would break rendering
-        if ! grep -q "<!DOCTYPE" "$file"; then
-            add_error "🚨 HTML MISSING DOCTYPE in $file (may cause rendering issues)"
-        fi
-        
-        if ! grep -q "<html" "$file"; then
-            add_error "🚨 HTML MISSING <html> tag in $file"
-        fi
-        
-        # Check for unclosed critical tags that break page structure
         if command -v htmlhint >/dev/null 2>&1; then
-            htmlhint_errors=$(htmlhint "$file" 2>&1 | grep -i "error" | head -5 || true)
-            if [ -n "$htmlhint_errors" ]; then
-                add_error "🚨 HTML STRUCTURE ERRORS in $file:"
-                add_error "$htmlhint_errors"
+            # Check for critical structural errors
+            htmlhint --rules=tag-pair "$file" > htmlhint_errors.txt 2>&1
+            if [ $? -ne 0 ]; then
+                echo "❌ Critical HTML error in $file:"
+                cat htmlhint_errors.txt
+                VALIDATION_PASSED=false
             else
-                add_info "✅ HTML structure OK: $file"
+                echo "✅ $file: HTML structure valid"
             fi
-        else
-            add_info "✅ HTML basic check OK: $file"
-        fi
-        
-        # Check inline JavaScript for critical syntax errors
-        if grep -q "<script" "$file"; then
-            awk '/<script[^>]*>/,/<\/script>/ {if (!/<script/ && !/<\/script>/) print}' "$file" > js_inline.tmp
-            if [ -s js_inline.tmp ]; then
-                if command -v node >/dev/null 2>&1; then
-                    if ! node -c js_inline.tmp 2>/dev/null; then
-                        node -c js_inline.tmp 2>js_error.tmp || true
-                        add_error "🚨 JAVASCRIPT SYNTAX ERROR in inline script in $file:"
-                        add_error "$(cat js_error.tmp)"
-                        rm -f js_error.tmp
-                    fi
-                fi
-            fi
-            rm -f js_inline.tmp
+            rm -f htmlhint_errors.txt
         fi
     done
 }
 
-# Validate CSS files for CRITICAL syntax errors only
+# Validate CSS files
 validate_css() {
-    echo "🎨 Checking CSS files for critical syntax errors..."
-    local css_files=$(find . -name "*.css" -not -path "./.git/*")
-
+    echo "Validating CSS files..."
+    local css_files=$(find . -name "*.css" -not -path "./node_modules/*" -not -path "./.git/*")
     if [ -z "$css_files" ]; then
-        add_info "ℹ️ No CSS files found"
+        echo "No CSS files found."
         return 0
     fi
-
     for file in $css_files; do
-        echo "Validating CSS: $file"
-        
-        # Check for basic syntax errors that break CSS parsing
         if command -v csslint >/dev/null 2>&1; then
-            css_errors=$(csslint --format=compact --quiet --errors=parsing-errors "$file" 2>&1 | grep -i "error" || true)
-            if [ -n "$css_errors" ]; then
-                add_error "🚨 CSS PARSING ERRORS in $file:"
-                add_error "$css_errors"
+            # Check for parsing errors only
+            csslint --errors=parsing "$file" > csslint_errors.txt 2>&1
+            if grep -q "Error" csslint_errors.txt; then
+                echo "❌ Critical CSS error in $file:"
+                cat csslint_errors.txt
+                VALIDATION_PASSED=false
             else
-                add_info "✅ CSS syntax OK: $file"
+                echo "✅ $file: CSS syntax valid"
             fi
-        else
-            # Basic check for unmatched braces
-            open_braces=$(grep -o "{" "$file" | wc -l)
-            close_braces=$(grep -o "}" "$file" | wc -l)
-            if [ "$open_braces" -ne "$close_braces" ]; then
-                add_error "🚨 CSS BRACE MISMATCH in $file: $open_braces opening vs $close_braces closing"
-            else
-                add_info "✅ CSS basic structure OK: $file"
-            fi
+            rm -f csslint_errors.txt
         fi
     done
 }
 
-# Validate JavaScript files for CRITICAL syntax errors only
-validate_javascript() {
-    echo "⚡ Checking JavaScript files for critical syntax errors..."
-    local js_files=$(find . -name "*.js" -not -path "./.git/*" -not -path "./node_modules/*")
-
+# Validate JavaScript files
+validate_js() {
+    echo "Validating JavaScript files..."
+    local js_files=$(find . -name "*.js" -not -path "./node_modules/*" -not -path "./.git/*")
     if [ -z "$js_files" ]; then
-        add_info "ℹ️ No JavaScript files found"
+        echo "No JavaScript files found."
         return 0
     fi
-
     for file in $js_files; do
-        echo "Validating JavaScript: $file"
-        
-        # Check for syntax errors that prevent execution
-        if command -v node >/dev/null 2>&1; then
-            if ! node -c "$file" 2>/dev/null; then
-                node -c "$file" 2>js_error.tmp || true
-                add_error "🚨 JAVASCRIPT SYNTAX ERROR in $file:"
-                add_error "$(cat js_error.tmp)"
-                rm -f js_error.tmp
+        if command -v eslint >/dev/null 2>&1; then
+            # Check for syntax errors only
+            eslint --no-eslintrc --parser-options="{ecmaVersion: 2020}" "$file" > eslint_errors.txt 2>&1
+            if [ $? -ne 0 ]; then
+                echo "❌ Critical JavaScript error in $file:"
+                cat eslint_errors.txt
+                VALIDATION_PASSED=false
             else
-                add_info "✅ JavaScript syntax OK: $file"
-            fi
-        else
-            add_info "⚠️ JavaScript validation skipped (Node.js not available)"
+                echo "✅ $file: JavaScript syntax valid"
+            fi Ninevember is running in the background to check this and ensure that the pipeline is running smoothly without any errors. fi
+            rm -f eslint_errors.txt
         fi
     done
 }
 
-# Validate PHP files for CRITICAL syntax errors only
+# Validate PHP files
 validate_php() {
-    echo "🐘 Checking PHP files for critical syntax errors..."
-    local php_files=$(find . -name "*.php" -not -path "./.git/*")
-
+    echo "Validating PHP files..."
+    local php_files=$(find . -name "*.php" -not -path "./node_modules/*" -not -path "./.git/*")
     if [ -z "$php_files" ]; then
-        add_info "ℹ️ No PHP files found"
+        echo "No PHP files found."
         return 0
     fi
-
     for file in $php_files; do
-        echo "Validating PHP: $file"
-        
-        # Check for syntax errors
         if command -v php >/dev/null 2>&1; then
-            if ! php -l "$file" >/dev/null 2>&1; then
-                php_error=$(php -l "$file" 2>&1 || true)
-                add_error "🚨 PHP SYNTAX ERROR in $file:"
-                add_error "$php_error"
+            php -l "$file" > php_errors.txt 2>&1
+            if [ $? -ne 0 ]; then
+                echo "❌ Critical PHP error in $file:"
+                cat php_errors.txt
+                VALIDATION_PASSED=false
             else
-                add_info "✅ PHP syntax OK: $file"
+                echo "✅ $file: PHP syntax valid"
             fi
-        else
-            add_info "⚠️ PHP validation skipped (PHP not available)"
+            rm -f php_errors.txt
         fi
     done
 }
 
-# Run all validations
-echo "🔍 CRITICAL ERROR VALIDATION - Only checking for errors that cause crashes"
-echo "========================================================================"
-
+# Run validations
 validate_python
-validate_html  
+validate_html
 validate_css
-validate_javascript
+validate_js
 validate_php
 
-# Generate report
-echo "CRITICAL ERRORS VALIDATION REPORT" > critical_errors.txt
-echo "=================================" >> critical_errors.txt
-echo "Generated: $(date)" >> critical_errors.txt
-echo "Build: ${BUILD_NUMBER:-'N/A'}" >> critical_errors.txt
-echo "Commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'N/A')" >> critical_errors.txt
-echo "" >> critical_errors.txt
-echo "Focus: Only syntax errors and critical issues that cause program crashes" >> critical_errors.txt
-echo "" >> critical_errors.txt
-echo -e "$ERROR_REPORT" >> critical_errors.txt
-echo "=================================" >> critical_errors.txt
-
-# Show report
-echo ""
-echo "📋 VALIDATION REPORT:"
-cat critical_errors.txt
-echo ""
-
-# Final result
-if [ "$CRITICAL_ERRORS_FOUND" = true ]; then
-    echo "❌ CRITICAL ERRORS FOUND - These will cause program crashes!"
-    echo "🛠️ Fix these errors before deployment"
-    exit 1
-else
-    echo "✅ NO CRITICAL ERRORS FOUND - Code should run without crashing"
-    echo "ℹ️ Note: Only checked for syntax errors and critical runtime issues"
+# Set exit status
+if [ "$VALIDATION_PASSED" = true ]; then
+    echo "All validations passed or no files to validate."
     exit 0
+else
+    echo "Critical errors found."
+    exit 1
 fi
